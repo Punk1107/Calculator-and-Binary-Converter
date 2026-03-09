@@ -25,7 +25,17 @@ import json
 import os
 import time
 import logging
+from datetime import datetime, date, timedelta
 from typing import Optional, Dict, List, Callable
+
+# ---------------------------------------------------------------------------
+# Tuneable constants
+# ---------------------------------------------------------------------------
+DEBOUNCE_PREVIEW_MS: int = 150    # live-preview delay (ms)
+STATUS_CLEAR_MS: int = 4_000      # auto-clear status bar after this delay
+TOOLTIP_DELAY_MS: int = 600       # tooltip show delay (ms)
+MAX_HISTORY: int = 100            # maximum stored history entries
+HISTORY_DISPLAY: int = 20         # entries shown in the panel
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -69,6 +79,8 @@ class SafeEvaluator:
             "inf": math.inf,
         }
     )
+    # Frozenset for O(1) name lookup during AST walk
+    _ALLOWED_NAME_SET: frozenset = frozenset(ALLOWED_NAMES)
 
     ALLOWED_NODES = (
         ast.Expression,
@@ -110,7 +122,7 @@ class SafeEvaluator:
                 raise ValueError(
                     f"Unsupported operation: {type(node).__name__}"
                 )
-            if isinstance(node, ast.Name) and node.id not in cls.ALLOWED_NAMES:
+            if isinstance(node, ast.Name) and node.id not in cls._ALLOWED_NAME_SET:
                 raise ValueError(f"Unknown name: '{node.id}'")
 
         compiled = compile(tree, "<safe>", "eval")
@@ -166,7 +178,7 @@ class Settings:
 class HistoryManager:
     """Manage calculation history with debounced, atomic file persistence."""
 
-    MAX = 100
+    MAX = MAX_HISTORY
     DEBOUNCE_MS = 150
 
     def __init__(self):
@@ -206,17 +218,35 @@ class HistoryManager:
 
     # ------------------------------------------------------------------
     def add(self, expression: str, result: str, elapsed_ms: float = 0.0):
+        """Add a new entry to the history list."""
         entry = {
             "expression": expression,
             "result": result,
             "elapsed_ms": round(elapsed_ms, 3),
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
         }
         self.history.insert(0, entry)
         if len(self.history) > self.MAX:
             self.history = self.history[: self.MAX]
         self._schedule_save()
 
-    def get_recent(self, limit: int = 20) -> List[Dict]:
+    @staticmethod
+    def friendly_time(iso: str) -> str:
+        """Return a human-friendly relative label for an ISO timestamp."""
+        try:
+            dt = datetime.fromisoformat(iso)
+            today = date.today()
+            d = dt.date()
+            if d == today:
+                return dt.strftime("%H:%M")
+            if d == today - timedelta(days=1):
+                return f"Yesterday {dt.strftime('%H:%M')}"
+            return dt.strftime("%d %b %H:%M")
+        except Exception:
+            return ""
+
+    def get_recent(self, limit: int = HISTORY_DISPLAY) -> List[Dict]:
+        """Return the most recent *limit* history entries."""
         return self.history[:limit]
 
     def clear(self):
@@ -361,8 +391,83 @@ class Theme:
 
 
 # ---------------------------------------------------------------------------
+# ToolTip — lightweight delayed tooltip
+# ---------------------------------------------------------------------------
+class ToolTip:
+    """Show a small tooltip window *TOOLTIP_DELAY_MS* ms after the mouse enters."""
+
+    def __init__(self, widget: tk.Widget, text: str):
+        self._widget = widget
+        self._text = text
+        self._job: Optional[str] = None
+        self._win: Optional[tk.Toplevel] = None
+        widget.bind("<Enter>", self._schedule, add="+")
+        widget.bind("<Leave>", self._cancel, add="+")
+        widget.bind("<ButtonPress>", self._cancel, add="+")
+
+    def _schedule(self, _event=None):
+        self._cancel()
+        self._job = self._widget.after(TOOLTIP_DELAY_MS, self._show)
+
+    def _cancel(self, _event=None):
+        if self._job:
+            self._widget.after_cancel(self._job)
+            self._job = None
+        if self._win:
+            self._win.destroy()
+            self._win = None
+
+    def _show(self):
+        if self._win:
+            return
+        x = self._widget.winfo_rootx() + self._widget.winfo_width() // 2
+        y = self._widget.winfo_rooty() + self._widget.winfo_height() + 4
+        self._win = tw = tk.Toplevel(self._widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        lbl = tk.Label(
+            tw, text=self._text, justify="left",
+            background="#ffffe0", foreground="#1a1a1a",
+            relief="solid", borderwidth=1,
+            font=("Segoe UI", 8), padx=6, pady=3,
+        )
+        lbl.pack()
+
+
+# ---------------------------------------------------------------------------
 # ModernButton — canvas-based, press animation, keyboard focus
 # ---------------------------------------------------------------------------
+
+# Button tooltip hints
+_BUTTON_TIPS: Dict[str, str] = {
+    "MC":  "Memory Clear",
+    "MR":  "Memory Recall",
+    "M+":  "Memory Add (current expression)",
+    "M-":  "Memory Subtract (current expression)",
+    "C":   "Clear all  [Esc]",
+    "⌫":  "Backspace  [Ctrl+Z]",
+    "=":   "Evaluate  [Enter]",
+    "Ans": "Insert last answer",
+    "√":   "Square root  √(x)",
+    "x²":  "Square  x²",
+    "xʸ":  "Power  x^y",
+    "÷":   "Divide",
+    "×":   "Multiply",
+    "−":   "Subtract",
+    "+":   "Add",
+    "sin": "sin(x) — sine in radians",
+    "cos": "cos(x) — cosine in radians",
+    "tan": "tan(x) — tangent in radians",
+    "ln":  "log(x) — natural logarithm",
+    "log": "log10(x) — base-10 logarithm",
+    "n!":  "factorial(x) — factorial",
+    "(":   "Open parenthesis",
+    ")":   "Close parenthesis",
+    "±":   "Toggle sign of last number",
+    ".":   "Decimal point",
+}
+
+
 class ModernButton(tk.Canvas):
     """Custom rounded button with hover/press animations and keyboard support."""
 
@@ -401,6 +506,10 @@ class ModernButton(tk.Canvas):
         self.bind("<space>",           self._on_space)
         self.bind("<Return>",          self._on_space)
         self.configure(cursor="hand2")
+        # Attach tooltip if a hint is defined
+        tip = _BUTTON_TIPS.get(text)
+        if tip:
+            ToolTip(self, tip)
         self.draw()
 
     # ---- resolve theme ------------------------------------------------
@@ -655,8 +764,12 @@ class CalculatorFrame(tk.Frame):
         for entry in self.history_manager.get_recent():
             expr = entry["expression"]
             res  = entry["result"]
+            ts   = HistoryManager.friendly_time(entry.get("timestamp", ""))
 
             start = self.history_text.index(tk.END)
+            # timestamp line
+            if ts:
+                self.history_text.insert(tk.END, f"  {ts}\n", "ts")
             self.history_text.insert(tk.END, f"  {expr}\n", "expr")
             self.history_text.insert(tk.END, f"  = {res}\n\n", "result")
 
@@ -676,6 +789,8 @@ class CalculatorFrame(tk.Frame):
 
         self.history_text.tag_config("expr",   foreground=theme["tag_expr"])
         self.history_text.tag_config("result", foreground=theme["tag_result"])
+        self.history_text.tag_config("ts",     foreground=theme["secondary_fg"],
+                                               font=("Segoe UI", 7))
         self.history_text.config(state="disabled")
 
     def _load_from_history(self, expr: str):
@@ -690,19 +805,35 @@ class CalculatorFrame(tk.Frame):
 
     # ------------------------------------------------------------------
     def _bind_keyboard(self):
-        self.bind_all("<Escape>",          lambda e: self.clear())
-        self.bind_all("<Delete>",          lambda e: self.clear())
-        self.bind_all("<Control-z>",       lambda e: self.backspace())
-        self.bind_all("<Control-BackSpace>",lambda e: self.clear())
-        self.bind_all("<Control-Return>",  lambda e: self.evaluate())
+        # Scope Escape/Delete to THIS frame so they don't fire in Converter
+        self.bind("<Escape>",            lambda e: self.clear())
+        self.bind("<Delete>",            lambda e: self.clear())
+        self.bind_all("<Control-z>",     lambda e: self._safe_backspace())
+        self.bind_all("<Control-BackSpace>", lambda e: self._safe_clear())
+        self.bind_all("<Control-Return>", lambda e: self._safe_evaluate())
         # <Control-c> left free for system copy
+
+    def _safe_clear(self):
+        """Clear only when Calculator tab is visible."""
+        if self.winfo_ismapped():
+            self.clear()
+
+    def _safe_backspace(self):
+        """Backspace only when Calculator tab is visible."""
+        if self.winfo_ismapped():
+            self.backspace()
+
+    def _safe_evaluate(self):
+        """Evaluate only when Calculator tab is visible."""
+        if self.winfo_ismapped():
+            self.evaluate()
 
     # ------------------------------------------------------------------
     def _on_expr_change(self, *_args):
-        """Schedule a live preview."""
+        """Schedule a live preview (debounced)."""
         if self._preview_job:
             self.after_cancel(self._preview_job)
-        self._preview_job = self.after(250, self._update_preview)
+        self._preview_job = self.after(DEBOUNCE_PREVIEW_MS, self._update_preview)
 
     def _update_preview(self):
         expr = self.expression_var.get().strip()
@@ -781,11 +912,18 @@ class CalculatorFrame(tk.Frame):
         expr = self.expression_var.get()
         if not expr:
             return
-        # try to flip the last number token
-        m = re.search(r"(-?\d+\.?\d*)$", expr)
+        m = re.search(r"(-?\d+\.?\d*(?:[eE][+-]?\d+)?)$", expr)
         if m:
             num_str = m.group(1)
-            replacement = str(-float(num_str)) if "." in num_str else str(-int(num_str))
+            try:
+                if "." in num_str or "e" in num_str.lower():
+                    val = -float(num_str)
+                    # avoid -0.0
+                    replacement = str(int(val)) if val.is_integer() else str(val)
+                else:
+                    replacement = str(-int(num_str))
+            except ValueError:
+                return
             self.expression_var.set(expr[: m.start()] + replacement)
 
     # ---- memory -------------------------------------------------------
@@ -820,6 +958,7 @@ class CalculatorFrame(tk.Frame):
 
     # ---- evaluate -----------------------------------------------------
     def evaluate(self):
+        """Evaluate the current expression and update the display."""
         expr = self.expression_var.get().strip()
         if not expr:
             return
@@ -839,14 +978,36 @@ class CalculatorFrame(tk.Frame):
 
             self.history_manager.add(expr, result_str, elapsed)
             self._load_history()
-            self.controller.set_status(
-                f"Calculated in {elapsed:.2f} ms"
-            )
+            self.controller.set_status(f"Calculated in {elapsed:.2f} ms")
+            # Brief accent-colour flash on success
+            self._flash_result()
 
         except Exception as exc:
             self.result_var.set("Error")
-            self.controller.set_status(f"Error: {exc}")
-            messagebox.showerror("Calculation Error", str(exc))
+            self.controller.set_status(f"\u26a0 {exc}")
+            # No messagebox — status bar is sufficient and non-blocking
+
+    def _flash_result(self):
+        """Briefly flash the result label in accent colour then restore."""
+        theme = Theme.get(self.controller.dark_mode.get())
+        accent = theme["accent"]
+        default_fg = theme["fg"]
+        # find the result Label by its textvariable
+        for w in self.winfo_children():
+            self._do_flash(w, accent, default_fg)
+
+    def _do_flash(self, widget, accent, default_fg):
+        """Recursively search for the result Label and flash it."""
+        if isinstance(widget, tk.Label):
+            try:
+                if widget.cget("textvariable") == str(self.result_var):
+                    widget.config(fg=accent)
+                    widget.after(220, lambda: widget.config(fg=default_fg))
+                    return
+            except tk.TclError:
+                pass
+        for child in widget.winfo_children():
+            self._do_flash(child, accent, default_fg)
 
     # ---- theme update -------------------------------------------------
     def apply_theme(self, theme: Dict):
@@ -898,27 +1059,45 @@ class ConverterFrame(tk.Frame):
         )
         in_frame.grid(row=1, column=0, sticky="ew", pady=(0, 16))
         in_frame.grid_columnconfigure(0, weight=1)
+        self.controller.register_widget(in_frame, "labelframe")
+
+        # Use a sub-frame for input + swap button
+        input_row = tk.Frame(in_frame)
+        input_row.grid(row=0, column=0, sticky="ew", pady=(0, 12))
+        input_row.grid_columnconfigure(0, weight=1)
+        self.controller.register_widget(input_row, "frame")
 
         self.input_var = tk.StringVar()
         self.input_var.trace_add("write", self._on_input_change)
 
         self.input_entry = tk.Entry(
-            in_frame, textvariable=self.input_var,
+            input_row, textvariable=self.input_var,
             font=("Consolas", 18), justify="center",
         )
-        self.input_entry.grid(row=0, column=0, sticky="ew", pady=(0, 12), ipady=4)
+        self.input_entry.grid(row=0, column=0, sticky="ew", ipady=4)
+
+        self.swap_btn = tk.Button(
+            input_row, text="⇅", font=("Segoe UI", 14),
+            relief="flat", cursor="hand2", width=3,
+            command=self._swap_input,
+        )
+        self.swap_btn.grid(row=0, column=1, padx=(10, 0))
+        self.controller.register_widget(self.swap_btn, "button")
+        ToolTip(self.swap_btn, "Swap input with selected result")
 
         # validation label
         self.valid_label = tk.Label(in_frame, text="", font=("Segoe UI", 9), anchor="e")
         self.valid_label.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        self.controller.register_widget(self.valid_label, "label")
 
         base_row = tk.Frame(in_frame)
         base_row.grid(row=2, column=0, sticky="ew")
         base_row.grid_columnconfigure(1, weight=1)
+        self.controller.register_widget(base_row, "frame")
 
-        tk.Label(base_row, text="From:", font=("Segoe UI", 10)).grid(
-            row=0, column=0, sticky="w", padx=(0, 10),
-        )
+        lbl_from = tk.Label(base_row, text="From:", font=("Segoe UI", 10))
+        lbl_from.grid(row=0, column=0, sticky="w", padx=(0, 10))
+        self.controller.register_widget(lbl_from, "label")
         self.from_var = tk.StringVar(value="Decimal")
         self.from_var.trace_add("write", self._on_input_change)
 
@@ -936,6 +1115,7 @@ class ConverterFrame(tk.Frame):
         )
         out_frame.grid(row=2, column=0, sticky="ew", pady=(0, 16))
         out_frame.grid_columnconfigure(1, weight=1)
+        self.controller.register_widget(out_frame, "labelframe")
 
         self.result_vars: Dict[str, tk.StringVar] = {}
         self.result_entries: Dict[str, tk.Entry] = {}
@@ -943,10 +1123,12 @@ class ConverterFrame(tk.Frame):
 
         BASES = ["Binary", "Octal", "Decimal", "Hexadecimal"]
         for i, base in enumerate(BASES):
-            tk.Label(
+            lbl_base = tk.Label(
                 out_frame, text=f"{base}:", font=("Segoe UI", 10, "bold"),
                 width=12, anchor="w",
-            ).grid(row=i, column=0, sticky="w", pady=6)
+            )
+            lbl_base.grid(row=i, column=0, sticky="w", pady=6)
+            self.controller.register_widget(lbl_base, "label")
 
             var = tk.StringVar(value="0")
             self.result_vars[base] = var
@@ -964,6 +1146,7 @@ class ConverterFrame(tk.Frame):
             bit_lbl = tk.Label(out_frame, text="", font=("Segoe UI", 8), width=8, anchor="w")
             bit_lbl.grid(row=i, column=2, sticky="w", padx=(0, 4))
             self.bit_labels[base] = bit_lbl
+            self.controller.register_widget(bit_lbl, "label")
 
             # per-row copy button
             copy_btn = tk.Button(
@@ -1058,6 +1241,19 @@ class ConverterFrame(tk.Frame):
             var.set("0")
         for lbl in self.bit_labels.values():
             lbl.config(text="")
+        # reset validation border
+        theme = Theme.get(self.controller.dark_mode.get())
+        self._set_valid_state(None, theme)
+
+    def _swap_input(self):
+        """Swap current input with the currently selected 'from_base' target if valid."""
+        theme = Theme.get(self.controller.dark_mode.get())
+        current_base = self.from_var.get()
+        # Find which base has a valid converted result other than "Error" or "—"
+        candidate = self.result_vars.get(current_base, tk.StringVar()).get()
+        if candidate and candidate not in ("0", "—", "Error"):
+            self.input_var.set(candidate)
+            self._set_valid_state(True, theme)
 
     def _copy_one(self, base: str):
         val = self.result_vars[base].get()
@@ -1071,6 +1267,70 @@ class ConverterFrame(tk.Frame):
         self.clipboard_clear()
         self.clipboard_append(text)
         self.controller.set_status("All results copied to clipboard")
+
+
+# ---------------------------------------------------------------------------
+# SegmentedControl — Custom pill toggle for modes
+# ---------------------------------------------------------------------------
+class SegmentedControl(tk.Frame):
+    """A custom toggle control that replaces radio buttons for Mode switching."""
+
+    def __init__(self, parent, variable: tk.StringVar, options: List[tuple[str, str]], command: Callable, controller=None):
+        super().__init__(parent)
+        self.variable = variable
+        self.options = options
+        self.command = command
+        self._controller = controller
+        self.buttons: Dict[str, tk.Label] = {}
+        
+        # We'll use a Canvas indicator that animating might be overkill, so we just style the labels.
+        for i, (text, val) in enumerate(options):
+            lbl = tk.Label(
+                self, text=text, font=("Segoe UI", 10, "bold"),
+                cursor="hand2", padx=12, pady=6,
+            )
+            lbl.grid(row=0, column=i, padx=2)
+            lbl.bind("<Button-1>", lambda e, v=val: self._select(v))
+            self.buttons[val] = lbl
+
+        self.variable.trace_add("write", self._on_var_change)
+        self._draw()
+
+    def _select(self, val: str):
+        self.variable.set(val)
+        if self.command:
+            self.command()
+
+    def _on_var_change(self, *_args):
+        self._draw()
+
+    def _theme(self):
+        if self._controller:
+            return Theme.get(self._controller.dark_mode.get())
+        w = self.master
+        while w and not hasattr(w, "dark_mode"):
+            w = w.master
+        if w:
+            self._controller = w
+            return Theme.get(w.dark_mode.get())
+        return Theme.DARK
+
+    def draw(self):
+        self._draw()
+
+    def _draw(self):
+        theme = self._theme()
+        self.configure(bg=theme["toolbar"])
+        current = self.variable.get()
+        for val, lbl in self.buttons.items():
+            if val == current:
+                lbl.configure(
+                    bg=theme["btn_hover"], fg=theme["fg"], relief="flat",
+                )
+            else:
+                lbl.configure(
+                    bg=theme["toolbar"], fg=theme["secondary_fg"], relief="flat",
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -1106,6 +1366,7 @@ class CalculatorApp(tk.Tk):
         self._apply_theme()
 
         self.bind_all("<Control-t>", lambda e: self._toggle_theme())
+        self.bind_all("<Control-slash>", lambda e: self._show_shortcuts())
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ---- widget registry ----------------------------------------------
@@ -1131,15 +1392,15 @@ class CalculatorApp(tk.Tk):
         self.register_widget(mode_frame, "toolbar")
 
         self.mode_var = tk.StringVar(value="calculator")
-
-        for text, value in [("𝄑 Calculator", "calculator"), ("⇄ Converter", "converter")]:
-            rb = tk.Radiobutton(
-                mode_frame, text=text, variable=self.mode_var, value=value,
-                command=self._switch_mode, font=("Segoe UI", 10),
-                cursor="hand2", relief="flat", bd=0,
-            )
-            rb.pack(side="left", padx=6)
-            self.register_widget(rb, "radiobutton")
+        opts = [("𝄑 Calculator", "calculator"), ("⇄ Converter", "converter")]
+        
+        self.mode_toggle = SegmentedControl(
+            mode_frame, variable=self.mode_var,
+            options=opts, command=self._switch_mode,
+            controller=self,
+        )
+        self.mode_toggle.pack(side="left")
+        self.register_widget(self.mode_toggle, "segmented")
 
         # separator
         sep = tk.Frame(toolbar, width=1)
@@ -1181,11 +1442,12 @@ class CalculatorApp(tk.Tk):
 
         # ---- status bar -----------------------------------------------
         self.status_bar = tk.Label(
-            self, text="Ready", anchor="w",
+            self, text="  Ready", anchor="w",
             font=("Segoe UI", 8), padx=8, pady=3,
         )
         self.status_bar.grid(row=2, column=0, sticky="ew")
         self.register_widget(self.status_bar, "status")
+        self._status_job: Optional[str] = None
 
     # ------------------------------------------------------------------
     def _switch_mode(self):
@@ -1193,7 +1455,53 @@ class CalculatorApp(tk.Tk):
         self.frames[name].tkraise()
 
     def set_status(self, msg: str):
+        """Set a temporary status message that reverts to 'Ready'."""
         self.status_bar.config(text=f"  {msg}")
+        if self._status_job:
+            self.after_cancel(self._status_job)
+        if msg.strip() != "Ready":
+            self._status_job = self.after(STATUS_CLEAR_MS, lambda: self.set_status("Ready"))
+
+    def _show_shortcuts(self):
+        """Show a dialog listing all keyboard shortcuts."""
+        tw = tk.Toplevel(self)
+        tw.title("Keyboard Shortcuts")
+        tw.geometry("320x340")
+        tw.resizable(False, False)
+        tw.transient(self)
+        tw.grab_set()
+
+        theme = Theme.get(self.dark_mode.get())
+        tw.configure(bg=theme["bg"])
+        
+        tk.Label(
+            tw, text="Keyboard Shortcuts", font=("Segoe UI", 14, "bold"),
+            bg=theme["bg"], fg=theme["fg"],
+        ).pack(pady=(16, 12))
+
+        shortcuts = [
+            ("Ctrl + /", "Show this help dialog"),
+            ("Ctrl + T", "Toggle Theme (Dark/Light)"),
+            ("Escape", "Clear All (Calculator)"),
+            ("Delete", "Clear All (Calculator)"),
+            ("Ctrl + Backspace", "Clear All (Calculator)"),
+            ("Ctrl + Z", "Backspace (Calculator)"),
+            ("Enter / Ctrl + Enter", "Evaluate Expression"),
+        ]
+
+        frame = tk.Frame(tw, bg=theme["panel"], bd=1, relief="solid")
+        frame.pack(fill="both", expand=True, padx=20, pady=(0, 20))
+        
+        for i, (keys, desc) in enumerate(shortcuts):
+            tk.Label(
+                frame, text=keys, font=("Consolas", 10, "bold"),
+                bg=theme["panel"], fg=theme["accent"], anchor="e", width=16,
+            ).grid(row=i, column=0, sticky="e", padx=(12, 8), pady=6)
+            
+            tk.Label(
+                frame, text=desc, font=("Segoe UI", 10),
+                bg=theme["panel"], fg=theme["fg"], anchor="w",
+            ).grid(row=i, column=1, sticky="w", padx=(0, 12), pady=6)
 
     def _toggle_theme(self):
         self.dark_mode.set(not self.dark_mode.get())
@@ -1237,15 +1545,15 @@ class CalculatorApp(tk.Tk):
         # root window
         self.configure(bg=theme["bg"])
 
-        # registered widgets
+        # registered widgets - copy list to allow mutation (deletion) during iteration
         for widget, kind in list(self._widget_registry.items()):
             try:
                 self._style_widget(widget, kind, theme)
             except tk.TclError:
                 # widget destroyed
-                del self._widget_registry[widget]
+                self._widget_registry.pop(widget, None)
 
-        # Walk remaining unstyled children (Labels inside LabelFrames etc.)
+        # Walk remaining unstyled children (Entries etc that weren't caught)
         self._walk_style(self, theme)
 
         # per-frame theme updates
@@ -1298,6 +1606,10 @@ class CalculatorApp(tk.Tk):
             widget.configure(bg=theme["status_bg"], fg=theme["status_fg"])
         elif isinstance(widget, ModernButton):
             widget.draw()
+        elif kind == "segmented" or isinstance(widget, SegmentedControl):
+            widget.draw()
+        elif kind == "labelframe" or widget.__class__.__name__ == "LabelFrame":
+            widget.configure(bg=theme["panel"], fg=theme["fg"])
 
     def _walk_style(self, widget: tk.Widget, theme: Dict):
         """Fallback recursive walk for widgets not in the registry."""
@@ -1344,6 +1656,8 @@ class CalculatorApp(tk.Tk):
                     activebackground=theme["bg"],
                 )
             elif isinstance(widget, ModernButton):
+                widget.draw()
+            elif isinstance(widget, SegmentedControl):
                 widget.draw()
         except tk.TclError:
             pass
