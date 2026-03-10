@@ -82,7 +82,7 @@ class SafeEvaluator:
     # Frozenset for O(1) name lookup during AST walk
     _ALLOWED_NAME_SET: frozenset = frozenset(ALLOWED_NAMES)
 
-    ALLOWED_NODES = (
+    _BASE_NODES = [
         ast.Expression,
         ast.Call,
         ast.Name,
@@ -96,13 +96,19 @@ class SafeEvaluator:
         ast.FloorDiv,
         ast.Tuple,
         ast.List,
-    )
+    ]
+    for _node in ["Num", "Str", "Bytes", "NameConstant"]:
+        if hasattr(ast, _node):
+            _BASE_NODES.append(getattr(ast, _node))
+    ALLOWED_NODES = tuple(_BASE_NODES)
 
     @classmethod
     def evaluate(cls, expr: str) -> float:
         """Safely evaluate a mathematical expression string."""
         if not expr or not expr.strip():
             raise ValueError("Empty expression")
+        if len(expr) > 5000:
+            raise ValueError("Expression too long")
 
         expr = (
             expr.strip()
@@ -320,7 +326,7 @@ class NumberConverter:
     def bit_length(decimal_val: int) -> int:
         if decimal_val == 0:
             return 1
-        return int(math.floor(math.log2(abs(decimal_val)))) + 1
+        return decimal_val.bit_length()
 
 
 # ---------------------------------------------------------------------------
@@ -674,12 +680,12 @@ class CalculatorFrame(tk.Frame):
 
         # result display
         self.result_var = tk.StringVar(value="0")
-        result_label = tk.Label(
+        self.result_label = tk.Label(
             disp, textvariable=self.result_var,
             font=("Consolas", 28, "bold"), anchor="e",
             padx=4,
         )
-        result_label.grid(row=3, column=0, sticky="ew", pady=(4, 0))
+        self.result_label.grid(row=3, column=0, sticky="ew", pady=(4, 0))
 
         # ---- buttons --------------------------------------------------
         btn_frame = tk.Frame(panel)
@@ -992,22 +998,9 @@ class CalculatorFrame(tk.Frame):
         theme = Theme.get(self.controller.dark_mode.get())
         accent = theme["accent"]
         default_fg = theme["fg"]
-        # find the result Label by its textvariable
-        for w in self.winfo_children():
-            self._do_flash(w, accent, default_fg)
-
-    def _do_flash(self, widget, accent, default_fg):
-        """Recursively search for the result Label and flash it."""
-        if isinstance(widget, tk.Label):
-            try:
-                if widget.cget("textvariable") == str(self.result_var):
-                    widget.config(fg=accent)
-                    widget.after(220, lambda: widget.config(fg=default_fg))
-                    return
-            except tk.TclError:
-                pass
-        for child in widget.winfo_children():
-            self._do_flash(child, accent, default_fg)
+        if hasattr(self, 'result_label') and self.result_label.winfo_exists():
+            self.result_label.config(fg=accent)
+            self.result_label.after(220, lambda: hasattr(self, 'result_label') and self.result_label.winfo_exists() and self.result_label.config(fg=default_fg))
 
     # ---- theme update -------------------------------------------------
     def apply_theme(self, theme: Dict):
