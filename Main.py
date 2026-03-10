@@ -28,6 +28,8 @@ import logging
 from datetime import datetime, date, timedelta
 from typing import Optional, Dict, List, Callable
 
+import plugin_module
+
 # ---------------------------------------------------------------------------
 # Tuneable constants
 # ---------------------------------------------------------------------------
@@ -70,47 +72,16 @@ def _safe_pow(base, exp):
 class SafeEvaluator:
     """Secure mathematical expression evaluator — no exec, no builtins."""
 
-    ALLOWED_NAMES: Dict = {
-        name: getattr(math, name)
-        for name in dir(math)
-        if not name.startswith("__")
-    }
-    ALLOWED_NAMES.update(
-        {
-            "abs": abs,
-            "round": round,
-            "pow": pow,
-            "min": min,
-            "max": max,
-            "e": math.e,          # Euler's number
-            "pi": math.pi,        # already in math namespace but explicit
-            "inf": math.inf,
-            "safe_pow": _safe_pow,
-        }
-    )
+    ALLOWED_NAMES: Dict = plugin_module.plugin_system.math_names.copy()
+    ALLOWED_NAMES["safe_pow"] = _safe_pow
+
     # Frozenset for O(1) name lookup during AST walk
     _ALLOWED_NAME_SET: frozenset = frozenset(ALLOWED_NAMES)
 
-    _BASE_NODES = [
-        ast.Expression,
-        ast.Call,
-        ast.Name,
-        ast.Load,
-        ast.BinOp,
-        ast.UnaryOp,
-        ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod,
-        ast.Pow, ast.USub, ast.UAdd,
-        ast.LShift, ast.RShift, ast.BitXor, ast.BitAnd, ast.BitOr,
-        ast.FloorDiv,
-        ast.Tuple,
-        ast.List,
-    ]
-    for _node in ["Constant", "Num", "Str", "Bytes", "NameConstant"]:
-        if hasattr(ast, _node):
-            _BASE_NODES.append(getattr(ast, _node))
-    ALLOWED_NODES = tuple(_BASE_NODES)
+    ALLOWED_NODES = plugin_module.plugin_system.ast_nodes
 
     @classmethod
+    @plugin_module.PluginManager.increase_performance()
     def evaluate(cls, expr: str) -> float:
         """Safely evaluate a mathematical expression string."""
         if not expr or not expr.strip():
@@ -288,19 +259,9 @@ class HistoryManager:
 class NumberConverter:
     """Number-system conversion with nibble grouping and signed support."""
 
-    BASES = {
-        "Binary": 2,
-        "Octal": 8,
-        "Decimal": 10,
-        "Hexadecimal": 16,
-    }
+    BASES = plugin_module.plugin_system.converter_bases
 
-    _PATTERNS = {
-        "Binary":      re.compile(r"^-?[01]+$"),
-        "Octal":       re.compile(r"^-?[0-7]+$"),
-        "Decimal":     re.compile(r"^-?\d+$"),
-        "Hexadecimal": re.compile(r"^-?[0-9A-Fa-f]+$"),
-    }
+    _PATTERNS = plugin_module.plugin_system.converter_patterns
 
     @classmethod
     def validate_input(cls, value: str, base_name: str) -> bool:
@@ -311,6 +272,7 @@ class NumberConverter:
         return bool(pattern and pattern.match(value))
 
     @classmethod
+    @plugin_module.PluginManager.increase_performance()
     def convert(cls, value: str, from_base: str, to_base: str) -> str:
         value = value.strip().replace(" ", "")
         if not cls.validate_input(value, from_base):
