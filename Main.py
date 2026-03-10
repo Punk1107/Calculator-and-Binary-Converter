@@ -59,6 +59,14 @@ os.makedirs(_APP_DIR, exist_ok=True)
 # ---------------------------------------------------------------------------
 # SafeEvaluator
 # ---------------------------------------------------------------------------
+def _safe_pow(base, exp):
+    if isinstance(exp, int) and abs(exp) > 10000:
+        raise ValueError("Exponent too large (limit 10000)")
+    try:
+        return base ** exp
+    except Exception as e:
+        raise ValueError(f"Math error: {e}")
+
 class SafeEvaluator:
     """Secure mathematical expression evaluator — no exec, no builtins."""
 
@@ -77,6 +85,7 @@ class SafeEvaluator:
             "e": math.e,          # Euler's number
             "pi": math.pi,        # already in math namespace but explicit
             "inf": math.inf,
+            "safe_pow": _safe_pow,
         }
     )
     # Frozenset for O(1) name lookup during AST walk
@@ -89,7 +98,6 @@ class SafeEvaluator:
         ast.Load,
         ast.BinOp,
         ast.UnaryOp,
-        ast.Constant,
         ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod,
         ast.Pow, ast.USub, ast.UAdd,
         ast.LShift, ast.RShift, ast.BitXor, ast.BitAnd, ast.BitOr,
@@ -97,7 +105,7 @@ class SafeEvaluator:
         ast.Tuple,
         ast.List,
     ]
-    for _node in ["Num", "Str", "Bytes", "NameConstant"]:
+    for _node in ["Constant", "Num", "Str", "Bytes", "NameConstant"]:
         if hasattr(ast, _node):
             _BASE_NODES.append(getattr(ast, _node))
     ALLOWED_NODES = tuple(_BASE_NODES)
@@ -122,6 +130,20 @@ class SafeEvaluator:
             tree = ast.parse(expr, mode="eval")
         except SyntaxError as exc:
             raise ValueError(f"Syntax error: {exc}") from exc
+
+        class PowTransformer(ast.NodeTransformer):
+            def visit_BinOp(self, node):
+                self.generic_visit(node)
+                if isinstance(node.op, ast.Pow):
+                    return ast.Call(
+                        func=ast.Name(id='safe_pow', ctx=ast.Load()),
+                        args=[node.left, node.right],
+                        keywords=[]
+                    )
+                return node
+                
+        tree = PowTransformer().visit(tree)
+        ast.fix_missing_locations(tree)
 
         for node in ast.walk(tree):
             if not isinstance(node, cls.ALLOWED_NODES):
@@ -1606,54 +1628,53 @@ class CalculatorApp(tk.Tk):
 
     def _walk_style(self, widget: tk.Widget, theme: Dict):
         """Fallback recursive walk for widgets not in the registry."""
-        if widget in self._widget_registry:
-            return
-        wc = widget.__class__.__name__
-        try:
-            if wc == "Frame":
-                widget.configure(bg=theme["bg"])
-            elif wc == "LabelFrame":
-                widget.configure(bg=theme["panel"], fg=theme["fg"])
-            elif wc == "Label":
-                widget.configure(bg=theme["panel"], fg=theme["fg"])
-            elif wc == "Entry":
-                state = widget.cget("state")
-                if str(state) == "readonly":
+        if widget not in self._widget_registry:
+            wc = widget.__class__.__name__
+            try:
+                if wc == "Frame":
+                    widget.configure(bg=theme["bg"])
+                elif wc == "LabelFrame":
+                    widget.configure(bg=theme["panel"], fg=theme["fg"])
+                elif wc == "Label":
+                    widget.configure(bg=theme["panel"], fg=theme["fg"])
+                elif wc == "Entry":
+                    state = widget.cget("state")
+                    if str(state) == "readonly":
+                        widget.configure(
+                            readonlybackground=theme["display_bg"],
+                            fg=theme["secondary_fg"],
+                        )
+                    else:
+                        widget.configure(
+                            bg=theme["display_bg"], fg=theme["fg"],
+                            insertbackground=theme["fg"],
+                        )
+                elif wc == "Text":
+                    widget.configure(bg=theme["history_bg"], fg=theme["fg"])
+                elif wc == "Button":
                     widget.configure(
-                        readonlybackground=theme["display_bg"],
-                        fg=theme["secondary_fg"],
+                        bg=theme["btn_bg"], fg=theme["fg"],
+                        activebackground=theme["btn_hover"],
+                        relief="flat",
                     )
-                else:
+                elif wc == "Radiobutton":
                     widget.configure(
-                        bg=theme["display_bg"], fg=theme["fg"],
-                        insertbackground=theme["fg"],
+                        bg=theme["bg"], fg=theme["fg"],
+                        selectcolor=theme["panel"],
+                        activebackground=theme["bg"],
                     )
-            elif wc == "Text":
-                widget.configure(bg=theme["history_bg"], fg=theme["fg"])
-            elif wc == "Button":
-                widget.configure(
-                    bg=theme["btn_bg"], fg=theme["fg"],
-                    activebackground=theme["btn_hover"],
-                    relief="flat",
-                )
-            elif wc == "Radiobutton":
-                widget.configure(
-                    bg=theme["bg"], fg=theme["fg"],
-                    selectcolor=theme["panel"],
-                    activebackground=theme["bg"],
-                )
-            elif wc == "Checkbutton":
-                widget.configure(
-                    bg=theme["bg"], fg=theme["fg"],
-                    selectcolor=theme["panel"],
-                    activebackground=theme["bg"],
-                )
-            elif isinstance(widget, ModernButton):
-                widget.draw()
-            elif isinstance(widget, SegmentedControl):
-                widget.draw()
-        except tk.TclError:
-            pass
+                elif wc == "Checkbutton":
+                    widget.configure(
+                        bg=theme["bg"], fg=theme["fg"],
+                        selectcolor=theme["panel"],
+                        activebackground=theme["bg"],
+                    )
+                elif isinstance(widget, ModernButton):
+                    widget.draw()
+                elif isinstance(widget, SegmentedControl):
+                    widget.draw()
+            except tk.TclError:
+                pass
 
         for child in widget.winfo_children():
             self._walk_style(child, theme)
