@@ -25,13 +25,17 @@ ALLOWED_NAMES.update({
     'factorial': math.factorial
 })
 
-ALLOWED_NODES = (
+_BASE_NODES = [
     ast.Expression, ast.Call, ast.Name, ast.Load, ast.BinOp, ast.UnaryOp,
-    ast.Num, ast.Constant, ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod,
+    ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod,
     ast.Pow, ast.USub, ast.UAdd, ast.LShift, ast.RShift, ast.BitXor,
     ast.BitAnd, ast.BitOr, ast.FloorDiv, ast.Tuple, ast.List, ast.Subscript,
     ast.Index, ast.Slice
-)
+]
+for _node in ["Num", "Str", "Bytes", "NameConstant", "Constant"]:
+    if hasattr(ast, _node):
+        _BASE_NODES.append(getattr(ast, _node))
+ALLOWED_NODES = tuple(_BASE_NODES)
 
 def safe_eval(expr: str):
     expr = expr.replace('×', '*').replace('÷', '/').replace('^', '**')
