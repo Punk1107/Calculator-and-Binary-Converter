@@ -334,61 +334,61 @@ class NumberConverter:
 # ---------------------------------------------------------------------------
 class Theme:
     LIGHT = {
-        "bg":           "#f0f2f5",
+        "bg":           "#f3f4f6",
         "toolbar":      "#ffffff",
         "panel":        "#ffffff",
-        "separator":    "#dee2e6",
-        "fg":           "#212529",
-        "secondary_fg": "#6c757d",
-        "btn_bg":       "#e9ecef",
-        "btn_hover":    "#d0d7de",
-        "btn_active":   "#c1cad4",
-        "accent":       "#0d6efd",
-        "accent_hover": "#0a58ca",
-        "border":       "#dee2e6",
-        "success":      "#198754",
-        "success_hover":"#146c43",
-        "error":        "#dc3545",
-        "error_hover":  "#b02a37",
-        "warning":      "#ffc107",
-        "display_bg":   "#f8f9fa",
+        "separator":    "#e5e7eb",
+        "fg":           "#111827",
+        "secondary_fg": "#6b7280",
+        "btn_bg":       "#f9fafb",
+        "btn_hover":    "#e5e7eb",
+        "btn_active":   "#d1d5db",
+        "accent":       "#2563eb",
+        "accent_hover": "#1d4ed8",
+        "border":       "#e5e7eb",
+        "success":      "#10b981",
+        "success_hover":"#059669",
+        "error":        "#ef4444",
+        "error_hover":  "#dc2626",
+        "warning":      "#f59e0b",
+        "display_bg":   "#f9fafb",
         "history_bg":   "#ffffff",
-        "memory_bg":    "#fff3cd",
-        "tag_expr":     "#6c757d",
-        "tag_result":   "#212529",
-        "status_bg":    "#e9ecef",
-        "status_fg":    "#495057",
-        "valid":        "#198754",
-        "invalid":      "#dc3545",
+        "memory_bg":    "#fef3c7",
+        "tag_expr":     "#6b7280",
+        "tag_result":   "#111827",
+        "status_bg":    "#f3f4f6",
+        "status_fg":    "#4b5563",
+        "valid":        "#10b981",
+        "invalid":      "#ef4444",
     }
 
     DARK = {
-        "bg":           "#0d1117",
-        "toolbar":      "#161b22",
-        "panel":        "#161b22",
-        "separator":    "#30363d",
-        "fg":           "#e6edf3",
-        "secondary_fg": "#8b949e",
-        "btn_bg":       "#21262d",
-        "btn_hover":    "#30363d",
-        "btn_active":   "#484f58",
-        "accent":       "#1f6feb",
-        "accent_hover": "#388bfd",
-        "border":       "#30363d",
-        "success":      "#238636",
-        "success_hover":"#2ea043",
-        "error":        "#da3633",
-        "error_hover":  "#f85149",
-        "warning":      "#e3b341",
-        "display_bg":   "#010409",
-        "history_bg":   "#0d1117",
-        "memory_bg":    "#3d2e00",
-        "tag_expr":     "#8b949e",
-        "tag_result":   "#e6edf3",
-        "status_bg":    "#21262d",
-        "status_fg":    "#8b949e",
-        "valid":        "#2ea043",
-        "invalid":      "#f85149",
+        "bg":           "#111827",
+        "toolbar":      "#1f2937",
+        "panel":        "#1f2937",
+        "separator":    "#374151",
+        "fg":           "#f9fafb",
+        "secondary_fg": "#9ca3af",
+        "btn_bg":       "#374151",
+        "btn_hover":    "#4b5563",
+        "btn_active":   "#6b7280",
+        "accent":       "#3b82f6",
+        "accent_hover": "#60a5fa",
+        "border":       "#374151",
+        "success":      "#10b981",
+        "success_hover":"#34d399",
+        "error":        "#ef4444",
+        "error_hover":  "#f87171",
+        "warning":      "#f59e0b",
+        "display_bg":   "#111827",
+        "history_bg":   "#1f2937",
+        "memory_bg":    "#78350f",
+        "tag_expr":     "#9ca3af",
+        "tag_result":   "#f9fafb",
+        "status_bg":    "#1f2937",
+        "status_fg":    "#9ca3af",
+        "valid":        "#34d399",
+        "invalid":      "#f87171",
     }
 
     @classmethod
@@ -477,8 +477,8 @@ _BUTTON_TIPS: Dict[str, str] = {
 class ModernButton(tk.Canvas):
     """Custom rounded button with hover/press animations and keyboard support."""
 
-    RADIUS = 8
-    ANIM_PRESS_OFFSET = 1   # shift down/right on press
+    RADIUS = 12
+    ANIM_PRESS_OFFSET = 2   # shift down/right on press
 
     def __init__(
         self,
@@ -661,7 +661,7 @@ class CalculatorFrame(tk.Frame):
         self.expression_var.trace_add("write", self._on_expr_change)
         self.expr_entry = tk.Entry(
             disp, textvariable=self.expression_var,
-            font=("Consolas", 14), justify="right",
+            font=("Segoe UI", 18), justify="right",
             relief="flat", bd=8,
         )
         self.expr_entry.grid(row=1, column=0, sticky="ew", ipady=6)
@@ -673,7 +673,7 @@ class CalculatorFrame(tk.Frame):
         self.preview_var = tk.StringVar(value="")
         self.preview_label = tk.Label(
             disp, textvariable=self.preview_var,
-            font=("Consolas", 11), anchor="e",
+            font=("Segoe UI", 12), anchor="e",
             padx=4,
         )
         self.preview_label.grid(row=2, column=0, sticky="ew")
@@ -682,7 +682,7 @@ class CalculatorFrame(tk.Frame):
         self.result_var = tk.StringVar(value="0")
         self.result_label = tk.Label(
             disp, textvariable=self.result_var,
-            font=("Consolas", 28, "bold"), anchor="e",
+            font=("Segoe UI", 36, "bold"), anchor="e",
             padx=4,
         )
         self.result_label.grid(row=3, column=0, sticky="ew", pady=(4, 0))
@@ -746,7 +746,7 @@ class CalculatorFrame(tk.Frame):
 
         self.history_text = tk.Text(
             hist_frame, wrap="word", state="disabled",
-            font=("Consolas", 10), relief="flat",
+            font=("Segoe UI", 11), relief="flat",
             yscrollcommand=scrollbar.set,
             cursor="arrow",
         )
@@ -754,7 +754,7 @@ class CalculatorFrame(tk.Frame):
         scrollbar.config(command=self.history_text.yview)
 
         self.history_text.tag_config("expr",   foreground="#8b949e")
-        self.history_text.tag_config("result", font=("Consolas", 11, "bold"))
+        self.history_text.tag_config("result", font=("Segoe UI", 13, "bold"))
         self.history_text.tag_config("clickable", underline=False)
 
         self.controller.register_widget(self.history_text, "text")
@@ -1065,7 +1065,7 @@ class ConverterFrame(tk.Frame):
 
         self.input_entry = tk.Entry(
             input_row, textvariable=self.input_var,
-            font=("Consolas", 18), justify="center",
+            font=("Segoe UI", 20, "bold"), justify="center",
         )
         self.input_entry.grid(row=0, column=0, sticky="ew", ipady=4)
 
@@ -1128,7 +1128,7 @@ class ConverterFrame(tk.Frame):
 
             ent = tk.Entry(
                 out_frame, textvariable=var,
-                font=("Consolas", 13), state="readonly",
+                font=("Segoe UI", 14, "bold"), state="readonly",
                 justify="left", relief="flat", readonlybackground="#f8f9fa",
             )
             ent.grid(row=i, column=1, sticky="ew", pady=6, padx=(0, 8))
